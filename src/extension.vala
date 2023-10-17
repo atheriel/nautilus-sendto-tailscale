@@ -105,18 +105,37 @@ class SendToTailscaleMenuProvider : Nautilus.MenuProvider, Object {
 	}
 
 	private async void send_to_device(List<string> filenames, string target) {
-		string[] argv = { "tailscale", "file", "cp" };
+		var app = GLib.Application.get_default ();
+		string[] argv = { "tailscale", "file", "cp", "--verbose" };
 		foreach (var path in filenames) {
 			argv += (!) path;
 		}
 		argv += target + ":";
 		try {
-			var proc = new Subprocess.newv (argv, SubprocessFlags.STDOUT_PIPE);
-			var stream = new DataInputStream ((!) proc.get_stdout_pipe ());
+			var proc = new Subprocess.newv (argv, SubprocessFlags.STDERR_PIPE);
+			var stream = new DataInputStream ((!) proc.get_stderr_pipe ());
 			string? rawline;
 			while ((rawline = yield stream.read_line_async ()) != null) {
 				var line = (!) rawline;
-				print ("in tailscale file cp: %s\n", line);
+				// Parse the CLI output to determine when a file has finished
+				// being sent.
+				if (!line.contains ("sending") && !line.contains ("sent")) {
+					print ("unexpected tailscale file cp output: %s\n", line);
+					continue;
+				}
+				var split = line.split ("sent ", 2);
+				if (split.length != 2) {
+					continue;
+				}
+				var file = split[1].replace ("\"", "");
+				if (app == null) {
+					print ("sent: %s\n", file);
+					continue;
+				}
+				var notification = new Notification (_("File Sent to Tailscale Device"));
+				notification.set_body (
+					_("%s was sent to device \"%s\".").printf (file, target));
+				((!) app).send_notification ("sendto-tailscale", notification);
 			}
 			proc.wait ();
 			if (proc.get_exit_status () != 0) {
